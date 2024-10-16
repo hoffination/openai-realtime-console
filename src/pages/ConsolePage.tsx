@@ -431,7 +431,11 @@ y   * - realtimeEvents are event logs, which can be expanded
 
       console.log(item);
 
-      if (item.role === 'assistant' && item.formatted.text) {
+      if (
+        item.role === 'assistant' &&
+        item.formatted.text &&
+        item.status === 'completed'
+      ) {
         try {
           // check if ID is already in translations
           if (item.id !== lastId) {
