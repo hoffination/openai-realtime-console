@@ -13,8 +13,7 @@ const LOCAL_RELAY_SERVER_URL: string =
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 
-import { RealtimeClient } from '@openai/realtime-api-beta';
-import { ItemType } from '@openai/realtime-api-beta/dist/lib/client.js';
+import { RealtimeClient } from 'openai-realtime-api';
 import { WavRecorder, WavStreamPlayer } from '../lib/wavtools/index.js';
 import { instructions } from '../utils/conversation_config.js';
 import { WavRenderer } from '../utils/wav_renderer';
@@ -65,10 +64,11 @@ export function ConsolePage() {
   const clientRef = useRef<RealtimeClient>(
     new RealtimeClient(
       LOCAL_RELAY_SERVER_URL
-        ? { url: LOCAL_RELAY_SERVER_URL }
+        ? { url: LOCAL_RELAY_SERVER_URL, model: 'gpt-4o-mini-realtime-preview' }
         : {
             apiKey: apiKey,
             dangerouslyAllowAPIKeyInBrowser: true,
+            model: 'gpt-4o-mini-realtime-preview',
           }
     )
   );
@@ -91,7 +91,7 @@ export function ConsolePage() {
 y   * - realtimeEvents are event logs, which can be expanded
    * - coords, marker are for get_weather() function
    */
-  const [items, setItems] = useState<ItemType[]>([]);
+  const [items, setItems] = useState<any[]>([]);
   const [realtimeEvents, setRealtimeEvents] = useState<RealtimeEvent[]>([]);
   const [expandedEvents, setExpandedEvents] = useState<{
     [key: string]: boolean;
@@ -103,7 +103,7 @@ y   * - realtimeEvents are event logs, which can be expanded
   const [translations, setTranslations] = useState<
     { source: string; dest: string }[]
   >([]);
-  let lastId = 0;
+  const lastIdRef = useRef<string | null>(null);
 
   const [selectedLanguage, setSelectedLanguage] = useState({
     code: 'ko',
@@ -259,7 +259,7 @@ y   * - realtimeEvents are event logs, which can be expanded
       turn_detection:
         value === 'none' ? null : { type: 'server_vad', threshold: 0.4 },
     });
-    if (value === 'server_vad' && client.isConnected()) {
+    if (value === 'server_vad' && client.isConnected) {
       await wavRecorder.record((data) => client.appendInputAudio(data.mono));
     }
     setCanPushToTalk(value === 'none');
@@ -392,7 +392,7 @@ y   * - realtimeEvents are event logs, which can be expanded
     client.updateSession({ modalities: ['text'] });
 
     // handle realtime events from client + server for event logging
-    client.on('realtime.event', (realtimeEvent: RealtimeEvent) => {
+    client.on('realtime.event', (realtimeEvent: any) => {
       setRealtimeEvents((realtimeEvents) => {
         const lastEvent = realtimeEvents[realtimeEvents.length - 1];
         if (lastEvent?.event.type === realtimeEvent.event.type) {
@@ -431,20 +431,21 @@ y   * - realtimeEvents are event logs, which can be expanded
 
       console.log(item);
 
-      if (item.role === 'assistant' && item.formatted.text) {
+      if (item.role === 'assistant' && item.formatted.text && item.status === 'completed') {
         try {
           // check if ID is already in translations
-          if (item.id !== lastId) {
+          if (item.id !== lastIdRef.current) {
             // parse the text into JSON-compatible format
-            const text = new String(item.formatted.text)
+            const text = String(item.formatted.text)
               .replaceAll('```json', '')
               .replaceAll('```', '')
               // replace all newlines with spaces
-              .replaceAll('\n', ' ');
+              .replaceAll('\n', ' ')
+              .trim();
             console.log({ text });
             const translationData = JSON.parse(text);
 
-            lastId = item.id;
+            lastIdRef.current = item.id;
             if (translationData.source && translationData.dest) {
               setTranslations((prev) => [...prev, translationData]);
             }
