@@ -50,6 +50,20 @@ export function Button({
     }
   };
 
+  const handleTouchStart = (event: React.TouchEvent<HTMLButtonElement>) => {
+    event.preventDefault(); // Prevent text selection on long press
+    if (onTouchStart) {
+      onTouchStart(event);
+    }
+  };
+
+  const handleTouchEnd = (event: React.TouchEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    if (onTouchEnd) {
+      onTouchEnd(event);
+    }
+  };
+
   const StartIcon = iconPosition === 'start' ? icon : null;
   const EndIcon = iconPosition === 'end' ? icon : null;
   const classList = [];
@@ -67,8 +81,8 @@ export function Button({
       className={classList.join(' ')}
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
-      onTouchStart={onTouchStart}
-      onTouchEnd={onTouchEnd}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
       {...rest}
     >
       {StartIcon && (

@@ -103,7 +103,7 @@ y   * - realtimeEvents are event logs, which can be expanded
   const [translations, setTranslations] = useState<
     { source: string; dest: string }[]
   >([]);
-  let lastId = 0;
+  const lastIdRef = useRef<string | null>(null);
 
   const [selectedLanguage, setSelectedLanguage] = useState({
     code: 'ko',
@@ -431,20 +431,21 @@ y   * - realtimeEvents are event logs, which can be expanded
 
       console.log(item);
 
-      if (item.role === 'assistant' && item.formatted.text) {
+      if (item.role === 'assistant' && item.formatted.text && item.status === 'completed') {
         try {
           // check if ID is already in translations
-          if (item.id !== lastId) {
+          if (item.id !== lastIdRef.current) {
             // parse the text into JSON-compatible format
-            const text = new String(item.formatted.text)
+            const text = String(item.formatted.text)
               .replaceAll('```json', '')
               .replaceAll('```', '')
               // replace all newlines with spaces
-              .replaceAll('\n', ' ');
+              .replaceAll('\n', ' ')
+              .trim();
             console.log({ text });
             const translationData = JSON.parse(text);
 
-            lastId = item.id;
+            lastIdRef.current = item.id;
             if (translationData.source && translationData.dest) {
               setTranslations((prev) => [...prev, translationData]);
             }
