@@ -1,5 +1,5 @@
 import { WebSocketServer } from 'ws';
-import { RealtimeClient } from '@openai/realtime-api-beta';
+import { RealtimeClient } from 'openai-realtime-api';
 
 export class RealtimeRelay {
   constructor(apiKey) {
@@ -55,7 +55,7 @@ export class RealtimeRelay {
       }
     };
     ws.on('message', (data) => {
-      if (!client.isConnected()) {
+      if (!client.isConnected) {
         messageQueue.push(data);
       } else {
         messageHandler(data);

@@ -13,8 +13,7 @@ const LOCAL_RELAY_SERVER_URL: string =
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 
-import { RealtimeClient } from '@openai/realtime-api-beta';
-import { ItemType } from '@openai/realtime-api-beta/dist/lib/client.js';
+import { RealtimeClient } from 'openai-realtime-api';
 import { WavRecorder, WavStreamPlayer } from '../lib/wavtools/index.js';
 import { instructions } from '../utils/conversation_config.js';
 import { WavRenderer } from '../utils/wav_renderer';
@@ -91,7 +90,7 @@ export function ConsolePage() {
 y   * - realtimeEvents are event logs, which can be expanded
    * - coords, marker are for get_weather() function
    */
-  const [items, setItems] = useState<ItemType[]>([]);
+  const [items, setItems] = useState<any[]>([]);
   const [realtimeEvents, setRealtimeEvents] = useState<RealtimeEvent[]>([]);
   const [expandedEvents, setExpandedEvents] = useState<{
     [key: string]: boolean;
@@ -259,7 +258,7 @@ y   * - realtimeEvents are event logs, which can be expanded
       turn_detection:
         value === 'none' ? null : { type: 'server_vad', threshold: 0.4 },
     });
-    if (value === 'server_vad' && client.isConnected()) {
+    if (value === 'server_vad' && client.isConnected) {
       await wavRecorder.record((data) => client.appendInputAudio(data.mono));
     }
     setCanPushToTalk(value === 'none');
@@ -392,7 +391,7 @@ y   * - realtimeEvents are event logs, which can be expanded
     client.updateSession({ modalities: ['text'] });
 
     // handle realtime events from client + server for event logging
-    client.on('realtime.event', (realtimeEvent: RealtimeEvent) => {
+    client.on('realtime.event', (realtimeEvent: any) => {
       setRealtimeEvents((realtimeEvents) => {
         const lastEvent = realtimeEvents[realtimeEvents.length - 1];
         if (lastEvent?.event.type === realtimeEvent.event.type) {
