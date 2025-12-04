@@ -64,10 +64,11 @@ export function ConsolePage() {
   const clientRef = useRef<RealtimeClient>(
     new RealtimeClient(
       LOCAL_RELAY_SERVER_URL
-        ? { url: LOCAL_RELAY_SERVER_URL }
+        ? { url: LOCAL_RELAY_SERVER_URL, model: 'gpt-4o-mini-realtime-preview' }
         : {
             apiKey: apiKey,
             dangerouslyAllowAPIKeyInBrowser: true,
+            model: 'gpt-4o-mini-realtime-preview',
           }
     )
   );
