@@ -51,15 +51,17 @@ export function Button({
   };
 
   const handleTouchStart = (event: React.TouchEvent<HTMLButtonElement>) => {
-    event.preventDefault(); // Prevent text selection on long press
+    // Only prevent default if we have a touch handler (e.g., push-to-talk)
+    // This prevents text selection on long press while allowing normal clicks
     if (onTouchStart) {
+      event.preventDefault();
       onTouchStart(event);
     }
   };
 
   const handleTouchEnd = (event: React.TouchEvent<HTMLButtonElement>) => {
-    event.preventDefault();
     if (onTouchEnd) {
+      event.preventDefault();
       onTouchEnd(event);
     }
   };
