@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { ChevronLeft, ChevronRight } from "react-feather";
+import { ChevronLeft, ChevronRight, X } from "react-feather";
 import logo from "/assets/openai-logomark.svg";
 import EventLog from "./EventLog";
 import SessionControls from "./SessionControls";
@@ -27,6 +27,7 @@ export default function App() {
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isEditingKey, setIsEditingKey] = useState(false);
+  const [error, setError] = useState(null);
 
   // Persist API key to localStorage
   useEffect(() => {
@@ -37,84 +38,101 @@ export default function App() {
 
   async function startSession() {
     if (!apiKey) {
-      alert("Please enter your OpenAI API key");
+      setError("Please enter your OpenAI API key");
       return;
     }
 
-    // Get a transcription session token
-    const turnDetection = inputMode === "vad" ? "server_vad" : "none";
-    const tokenResponse = await fetch(`/token?turnDetection=${turnDetection}`, {
-      headers: { "X-API-Key": apiKey },
-    });
-    const data = await tokenResponse.json();
-    console.log("Token response:", data);
+    // Clear any previous errors
+    setError(null);
 
-    if (data.error) {
-      console.error("API error:", data.error);
-      alert(`API Error: ${data.error.message || data.error}`);
-      throw new Error(data.error.message || "API error");
+    let ms = null;
+    let pc = null;
+
+    try {
+      // Get a transcription session token
+      const turnDetection = inputMode === "vad" ? "server_vad" : "none";
+      const tokenResponse = await fetch(`/token?turnDetection=${turnDetection}`, {
+        headers: { "X-API-Key": apiKey },
+      });
+      const data = await tokenResponse.json();
+      console.log("Token response:", data);
+
+      if (data.error) {
+        console.error("API error:", data.error);
+        throw new Error(data.error.message || data.error);
+      }
+
+      const EPHEMERAL_KEY = data.client_secret?.value || data.value;
+      console.log("Ephemeral key prefix:", EPHEMERAL_KEY?.substring(0, 10));
+
+      if (!EPHEMERAL_KEY) {
+        console.error("No ephemeral key in response:", data);
+        throw new Error("Failed to get session token. Check your API key.");
+      }
+
+      // Create a peer connection
+      pc = new RTCPeerConnection();
+
+      // Add local audio track for microphone input
+      ms = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      mediaStream.current = ms;
+      const audioTrack = ms.getTracks()[0];
+
+      // For push-to-talk, start with track disabled
+      if (inputMode === "push-to-talk") {
+        audioTrack.enabled = false;
+      }
+
+      pc.addTrack(audioTrack);
+
+      // Set up data channel for sending and receiving events
+      const dc = pc.createDataChannel("oai-events");
+      setDataChannel(dc);
+
+      // Start the session using the Session Description Protocol (SDP)
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      console.log("Offer SDP (first 200 chars):", offer.sdp.substring(0, 200));
+
+      const baseUrl = "https://api.openai.com/v1/realtime/calls";
+      const model = "gpt-realtime";
+      const sdpResponse = await fetch(`${baseUrl}?model=${model}`, {
+        method: "POST",
+        body: offer.sdp,
+        headers: {
+          Authorization: `Bearer ${EPHEMERAL_KEY}`,
+          "Content-Type": "application/sdp",
+        },
+      });
+
+      const sdpText = await sdpResponse.text();
+      console.log("SDP response status:", sdpResponse.status);
+      console.log("SDP response:", sdpText.substring(0, 500));
+
+      if (!sdpResponse.ok) {
+        console.error("SDP exchange failed:", sdpResponse.status, sdpText);
+        throw new Error(`SDP exchange failed: ${sdpResponse.status}`);
+      }
+
+      const sdp = sdpText;
+      const answer = { type: "answer", sdp };
+      await pc.setRemoteDescription(answer);
+
+      peerConnection.current = pc;
+    } catch (err) {
+      // Clean up resources on failure
+      if (ms) {
+        ms.getTracks().forEach((track) => track.stop());
+        mediaStream.current = null;
+      }
+      if (pc) {
+        pc.close();
+      }
+      setError(err.message || "Failed to start session");
+      throw err;
     }
-
-    const EPHEMERAL_KEY = data.client_secret?.value || data.value;
-    console.log("Ephemeral key prefix:", EPHEMERAL_KEY?.substring(0, 10));
-
-    if (!EPHEMERAL_KEY) {
-      console.error("No ephemeral key in response:", data);
-      alert("Failed to get session token. Check your API key.");
-      throw new Error("Failed to get ephemeral key");
-    }
-
-    // Create a peer connection
-    const pc = new RTCPeerConnection();
-
-    // Add local audio track for microphone input
-    const ms = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-    });
-    mediaStream.current = ms;
-    const audioTrack = ms.getTracks()[0];
-
-    // For push-to-talk, start with track disabled
-    if (inputMode === "push-to-talk") {
-      audioTrack.enabled = false;
-    }
-
-    pc.addTrack(audioTrack);
-
-    // Set up data channel for sending and receiving events
-    const dc = pc.createDataChannel("oai-events");
-    setDataChannel(dc);
-
-    // Start the session using the Session Description Protocol (SDP)
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    console.log("Offer SDP (first 200 chars):", offer.sdp.substring(0, 200));
-
-    const baseUrl = "https://api.openai.com/v1/realtime/calls";
-    const model = "gpt-realtime";
-    const sdpResponse = await fetch(`${baseUrl}?model=${model}`, {
-      method: "POST",
-      body: offer.sdp,
-      headers: {
-        Authorization: `Bearer ${EPHEMERAL_KEY}`,
-        "Content-Type": "application/sdp",
-      },
-    });
-
-    const sdpText = await sdpResponse.text();
-    console.log("SDP response status:", sdpResponse.status);
-    console.log("SDP response:", sdpText.substring(0, 500));
-
-    if (!sdpResponse.ok) {
-      console.error("SDP exchange failed:", sdpResponse.status, sdpText);
-      throw new Error(`SDP exchange failed: ${sdpResponse.status}`);
-    }
-
-    const sdp = sdpText;
-    const answer = { type: "answer", sdp };
-    await pc.setRemoteDescription(answer);
-
-    peerConnection.current = pc;
   }
 
   // Stop current session, clean up peer connection and data channel
@@ -155,7 +173,16 @@ export default function App() {
           }),
         });
 
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `Translation failed: ${response.status}`);
+        }
+
         const translation = await response.json();
+
+        if (translation.error) {
+          throw new Error(translation.error);
+        }
 
         // Determine speaker based on detected language
         const speaker = translation.detectedLanguage === languageA ? "A" : "B";
@@ -171,8 +198,9 @@ export default function App() {
         };
 
         setTranslations((prev) => [...prev, entry]);
-      } catch (error) {
-        console.error("Translation failed:", error);
+      } catch (err) {
+        console.error("Translation failed:", err);
+        setError(`Translation failed: ${err.message}`);
       }
     },
     [languageA, languageB, apiKey],
@@ -283,7 +311,25 @@ export default function App() {
           )}
         </div>
       </nav>
-      <main className="absolute top-16 left-0 right-0 bottom-0">
+
+      {/* Error banner */}
+      {error && (
+        <div className="absolute top-16 left-0 right-0 z-50 mx-4 mt-2">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-red-600 text-sm">{error}</span>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              className="text-red-400 hover:text-red-600 p-1"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <main className={`absolute left-0 right-0 bottom-0 ${error ? "top-28" : "top-16"}`}>
         {/* Main content area - ConversationTimeline */}
         <section
           className={`absolute top-0 left-0 bottom-0 flex flex-col transition-all duration-300 ${
