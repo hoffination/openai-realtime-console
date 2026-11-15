@@ -18,10 +18,10 @@ import { WavRecorder, WavStreamPlayer } from '../lib/wavtools/index.js';
 import { instructions } from '../utils/conversation_config.js';
 import { WavRenderer } from '../utils/wav_renderer';
 
-import { X, Edit, Zap, ArrowUp, ArrowDown, Menu } from 'react-feather';
+import { X, Zap, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Edit } from 'react-feather';
 import { Button } from '../components/button/Button';
 import { Toggle } from '../components/toggle/Toggle';
-import { Select } from '../components/select/Select'; // Add this import
+import { ConversationTimeline } from '../components/conversation-timeline/ConversationTimeline';
 
 import './ConsolePage.scss';
 
@@ -35,19 +35,48 @@ interface RealtimeEvent {
   event: { [key: string]: any };
 }
 
+interface Translation {
+  sourceLanguage: string;
+  sourceText: string;
+  targetLanguage: string;
+  targetText: string;
+  timestamp: string;
+}
+
+const LANGUAGES = [
+  'English',
+  'Korean',
+  'Japanese',
+  'Chinese',
+  'Spanish',
+  'French',
+  'German',
+  'Italian',
+  'Portuguese',
+  'Russian',
+];
+
 export function ConsolePage() {
-  /**
-   * Ask user for API Key
-   * If we're using the local relay server, we don't need this
-   */
-  const apiKey = LOCAL_RELAY_SERVER_URL
-    ? ''
-    : localStorage.getItem('tmp::voice_api_key') ||
-      prompt('OpenAI API Key') ||
-      '';
-  if (apiKey !== '') {
-    localStorage.setItem('tmp::voice_api_key', apiKey);
-  }
+  // API Key state
+  const [apiKey, setApiKey] = useState(() => {
+    return localStorage.getItem('openai-api-key') || '';
+  });
+  const [isEditingKey, setIsEditingKey] = useState(false);
+  const [keyInput, setKeyInput] = useState(apiKey);
+
+  // Persist API key to localStorage
+  useEffect(() => {
+    if (apiKey) {
+      localStorage.setItem('openai-api-key', apiKey);
+    }
+  }, [apiKey]);
+
+  // Sync keyInput when entering edit mode
+  useEffect(() => {
+    if (isEditingKey) {
+      setKeyInput(apiKey);
+    }
+  }, [isEditingKey, apiKey]);
 
   /**
    * Instantiate:
@@ -61,17 +90,7 @@ export function ConsolePage() {
   const wavStreamPlayerRef = useRef<WavStreamPlayer>(
     new WavStreamPlayer({ sampleRate: 24000 })
   );
-  const clientRef = useRef<RealtimeClient>(
-    new RealtimeClient(
-      LOCAL_RELAY_SERVER_URL
-        ? { url: LOCAL_RELAY_SERVER_URL, model: 'gpt-4o-mini-realtime-preview' }
-        : {
-            apiKey: apiKey,
-            dangerouslyAllowAPIKeyInBrowser: true,
-            model: 'gpt-4o-mini-realtime-preview',
-          }
-    )
-  );
+  const clientRef = useRef<RealtimeClient | null>(null);
 
   /**
    * References for
@@ -87,9 +106,6 @@ export function ConsolePage() {
 
   /**
    * All of our variables for displaying application state
-   * - items are all conversation items (dialog)
-y   * - realtimeEvents are event logs, which can be expanded
-   * - coords, marker are for get_weather() function
    */
   const [items, setItems] = useState<any[]>([]);
   const [realtimeEvents, setRealtimeEvents] = useState<RealtimeEvent[]>([]);
@@ -99,27 +115,13 @@ y   * - realtimeEvents are event logs, which can be expanded
   const [isConnected, setIsConnected] = useState(false);
   const [canPushToTalk, setCanPushToTalk] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
-  const [isSideMenuOpen, setIsSideMenuOpen] = useState(false);
-  const [translations, setTranslations] = useState<
-    { source: string; dest: string }[]
-  >([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [translations, setTranslations] = useState<Translation[]>([]);
   const lastIdRef = useRef<string | null>(null);
 
-  const [selectedLanguage, setSelectedLanguage] = useState({
-    code: 'ko',
-    label: '🇰🇷 Korean',
-    text: '번역된 텍스트',
-  });
-
-  const languages = [
-    { code: 'ko', label: '🇰🇷 Korean', text: '번역된 텍스트' },
-    { code: 'ja', label: '🇯🇵 Japanese', text: '翻訳されたテキスト' },
-    { code: 'zh', label: '🇨🇳 Chinese', text: '翻译文本' },
-    { code: 'es', label: '🇪🇸 Spanish', text: 'Texto traducido' },
-    { code: 'fr', label: '🇫🇷 French', text: 'Texte traduit' },
-    { code: 'de', label: '🇩🇪 German', text: 'Übersetzter Text' },
-    // Add more languages as needed
-  ];
+  // Language selection - two-way
+  const [languageA, setLanguageA] = useState('English');
+  const [languageB, setLanguageB] = useState('Korean');
 
   /**
    * Utility for formatting the timing of logs
@@ -143,28 +145,38 @@ y   * - realtimeEvents are event logs, which can be expanded
   }, []);
 
   /**
-   * When you click the API key
+   * Handle API key form submission
    */
-  const resetAPIKey = useCallback(() => {
-    const apiKey = prompt('OpenAI API Key');
-    if (apiKey !== null) {
-      localStorage.clear();
-      localStorage.setItem('tmp::voice_api_key', apiKey);
-      window.location.reload();
+  const handleKeySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (keyInput.trim()) {
+      setApiKey(keyInput.trim());
+      setIsEditingKey(false);
     }
-  }, []);
-
-  // toggle the side menu open or closed
-  const toggleSideMenu = () => {
-    setIsSideMenuOpen(!isSideMenuOpen);
   };
 
   /**
    * Connect to conversation:
-   * WavRecorder taks speech input, WavStreamPlayer output, client is API client
+   * WavRecorder takes speech input, WavStreamPlayer output, client is API client
    */
   const connectConversation = useCallback(async () => {
-    const client = clientRef.current;
+    if (!apiKey && !LOCAL_RELAY_SERVER_URL) {
+      alert('Please enter your OpenAI API key');
+      return;
+    }
+
+    // Create client on connect
+    const client = new RealtimeClient(
+      LOCAL_RELAY_SERVER_URL
+        ? { url: LOCAL_RELAY_SERVER_URL, model: 'gpt-4o-mini-realtime-preview' }
+        : {
+            apiKey: apiKey,
+            dangerouslyAllowAPIKeyInBrowser: true,
+            model: 'gpt-4o-mini-realtime-preview',
+          }
+    );
+    clientRef.current = client;
+
     const wavRecorder = wavRecorderRef.current;
     const wavStreamPlayer = wavStreamPlayerRef.current;
 
@@ -172,7 +184,80 @@ y   * - realtimeEvents are event logs, which can be expanded
     startTimeRef.current = new Date().toISOString();
     setIsConnected(true);
     setRealtimeEvents([]);
-    setItems(client.conversation.getItems());
+    setTranslations([]);
+
+    // Set instructions for two-way translation
+    client.updateSession({
+      instructions: instructions({ languageA, languageB }),
+    });
+    client.updateSession({ modalities: ['text'] });
+
+    // Handle realtime events from client + server for event logging
+    client.on('realtime.event', (realtimeEvent: any) => {
+      setRealtimeEvents((realtimeEvents) => {
+        const lastEvent = realtimeEvents[realtimeEvents.length - 1];
+        if (lastEvent?.event.type === realtimeEvent.event.type) {
+          lastEvent.count = (lastEvent.count || 0) + 1;
+          return realtimeEvents.slice(0, -1).concat(lastEvent);
+        } else {
+          return realtimeEvents.concat(realtimeEvent);
+        }
+      });
+    });
+
+    client.on('error', (event: any) => console.error(event));
+
+    client.on('conversation.interrupted', async () => {
+      const trackSampleOffset = await wavStreamPlayer.interrupt();
+      if (trackSampleOffset?.trackId) {
+        const { trackId, offset } = trackSampleOffset;
+        await client.cancelResponse(trackId, offset);
+      }
+    });
+
+    client.on('conversation.updated', async ({ item, delta }: any) => {
+      const items = client.conversation.getItems();
+      if (delta?.audio) {
+        wavStreamPlayer.add16BitPCM(delta.audio, item.id);
+      }
+      if (item.status === 'completed' && item.formatted.audio?.length) {
+        const wavFile = await WavRecorder.decode(
+          item.formatted.audio,
+          24000,
+          24000
+        );
+        item.formatted.file = wavFile;
+      }
+      setItems(items);
+
+      // Parse translation from assistant response
+      if (item.role === 'assistant' && item.formatted.text && item.status === 'completed') {
+        try {
+          if (item.id !== lastIdRef.current) {
+            const text = String(item.formatted.text)
+              .replaceAll('```json', '')
+              .replaceAll('```', '')
+              .replaceAll('\n', ' ')
+              .trim();
+
+            const translationData = JSON.parse(text);
+            lastIdRef.current = item.id;
+
+            if (translationData.sourceText && translationData.targetText) {
+              setTranslations((prev) => [...prev, {
+                sourceLanguage: translationData.sourceLanguage || languageA,
+                sourceText: translationData.sourceText,
+                targetLanguage: translationData.targetLanguage || languageB,
+                targetText: translationData.targetText,
+                timestamp: new Date().toISOString(),
+              }]);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to parse translation data:', error);
+        }
+      }
+    });
 
     // Connect to microphone
     await wavRecorder.begin();
@@ -182,18 +267,21 @@ y   * - realtimeEvents are event logs, which can be expanded
 
     // Connect to realtime API
     await client.connect();
+
+    // Send initial greeting
     client.sendUserMessageContent([
       {
-        type: `input_text`,
-        text: `Hello!`,
-        // text: `For testing purposes, I want you to list ten car brands. Number each item, e.g. "one (or whatever number you are one): the item name".`
+        type: 'input_text',
+        text: 'Hello! Ready to translate.',
       },
     ]);
 
     if (client.getTurnDetectionType() === 'server_vad') {
       await wavRecorder.record((data) => client.appendInputAudio(data.mono));
     }
-  }, []);
+
+    setItems(client.conversation.getItems());
+  }, [apiKey, languageA, languageB]);
 
   /**
    * Disconnect and reset conversation state
@@ -204,7 +292,10 @@ y   * - realtimeEvents are event logs, which can be expanded
     setItems([]);
 
     const client = clientRef.current;
-    client.disconnect();
+    if (client) {
+      client.disconnect();
+      clientRef.current = null;
+    }
 
     const wavRecorder = wavRecorderRef.current;
     await wavRecorder.end();
@@ -213,18 +304,14 @@ y   * - realtimeEvents are event logs, which can be expanded
     await wavStreamPlayer.interrupt();
   }, []);
 
-  const deleteConversationItem = useCallback(async (id: string) => {
-    const client = clientRef.current;
-    client.deleteItem(id);
-  }, []);
-
   /**
    * In push-to-talk mode, start recording
-   * .appendInputAudio() for each sample
    */
   const startRecording = async () => {
     setIsRecording(true);
     const client = clientRef.current;
+    if (!client) return;
+
     const wavRecorder = wavRecorderRef.current;
     const wavStreamPlayer = wavStreamPlayerRef.current;
     const trackSampleOffset = await wavStreamPlayer.interrupt();
@@ -241,6 +328,8 @@ y   * - realtimeEvents are event logs, which can be expanded
   const stopRecording = async () => {
     setIsRecording(false);
     const client = clientRef.current;
+    if (!client) return;
+
     const wavRecorder = wavRecorderRef.current;
     await wavRecorder.pause();
     client.createResponse();
@@ -251,6 +340,8 @@ y   * - realtimeEvents are event logs, which can be expanded
    */
   const changeTurnEndType = async (value: string) => {
     const client = clientRef.current;
+    if (!client) return;
+
     const wavRecorder = wavRecorderRef.current;
     if (value === 'none' && wavRecorder.getStatus() === 'recording') {
       await wavRecorder.pause();
@@ -265,16 +356,6 @@ y   * - realtimeEvents are event logs, which can be expanded
     setCanPushToTalk(value === 'none');
   };
 
-  const changeSelectedLanguage = (language: any) => {
-    setSelectedLanguage(language);
-    clientRef.current.updateSession({
-      instructions: instructions({
-        label: language.label,
-        text: language.text,
-      }),
-    });
-  };
-
   /**
    * Auto-scroll the event logs
    */
@@ -282,26 +363,12 @@ y   * - realtimeEvents are event logs, which can be expanded
     if (eventsScrollRef.current) {
       const eventsEl = eventsScrollRef.current;
       const scrollHeight = eventsEl.scrollHeight;
-      // Only scroll if height has just changed
       if (scrollHeight !== eventsScrollHeightRef.current) {
         eventsEl.scrollTop = scrollHeight;
         eventsScrollHeightRef.current = scrollHeight;
       }
     }
   }, [realtimeEvents]);
-
-  /**
-   * Auto-scroll the conversation logs
-   */
-  useEffect(() => {
-    const conversationEls = [].slice.call(
-      document.body.querySelectorAll('[data-conversation-content]')
-    );
-    for (const el of conversationEls) {
-      const conversationEl = el as HTMLDivElement;
-      conversationEl.scrollTop = conversationEl.scrollHeight;
-    }
-  }, [items]);
 
   /**
    * Set up render loops for the visualization canvas
@@ -374,165 +441,126 @@ y   * - realtimeEvents are event logs, which can be expanded
   }, []);
 
   /**
-   * Core RealtimeClient and audio capture setup
-   * Set all of our instructions, tools, events and more
-   */
-  useEffect(() => {
-    // Get refs
-    const wavStreamPlayer = wavStreamPlayerRef.current;
-    const client = clientRef.current;
-
-    // Set instructions
-    client.updateSession({
-      instructions: instructions({ label: '🇰🇷 Korean', text: '번역된 텍스트' }),
-    });
-    // Set transcription, otherwise we don't get user transcriptions back
-    // client.updateSession({ input_audio_transcription: { model: 'whisper-1' } });
-
-    client.updateSession({ modalities: ['text'] });
-
-    // handle realtime events from client + server for event logging
-    client.on('realtime.event', (realtimeEvent: any) => {
-      setRealtimeEvents((realtimeEvents) => {
-        const lastEvent = realtimeEvents[realtimeEvents.length - 1];
-        if (lastEvent?.event.type === realtimeEvent.event.type) {
-          // if we receive multiple events in a row, aggregate them for display purposes
-          lastEvent.count = (lastEvent.count || 0) + 1;
-          return realtimeEvents.slice(0, -1).concat(lastEvent);
-        } else {
-          return realtimeEvents.concat(realtimeEvent);
-        }
-      });
-    });
-    client.on('error', (event: any) => console.error(event));
-    client.on('conversation.interrupted', async () => {
-      console.log('conversation interrupted');
-      const trackSampleOffset = await wavStreamPlayer.interrupt();
-      if (trackSampleOffset?.trackId) {
-        const { trackId, offset } = trackSampleOffset;
-        console.log('ignoring cancel on interrupted', { trackId, offset });
-        // await client.cancelResponse(trackId, offset);
-      }
-    });
-    client.on('conversation.updated', async ({ item, delta }: any) => {
-      const items = client.conversation.getItems();
-      if (delta?.audio) {
-        wavStreamPlayer.add16BitPCM(delta.audio, item.id);
-      }
-      if (item.status === 'completed' && item.formatted.audio?.length) {
-        const wavFile = await WavRecorder.decode(
-          item.formatted.audio,
-          24000,
-          24000
-        );
-        item.formatted.file = wavFile;
-      }
-      setItems(items);
-
-      console.log(item);
-
-      if (item.role === 'assistant' && item.formatted.text && item.status === 'completed') {
-        try {
-          // check if ID is already in translations
-          if (item.id !== lastIdRef.current) {
-            // parse the text into JSON-compatible format
-            const text = String(item.formatted.text)
-              .replaceAll('```json', '')
-              .replaceAll('```', '')
-              // replace all newlines with spaces
-              .replaceAll('\n', ' ')
-              .trim();
-            console.log({ text });
-            const translationData = JSON.parse(text);
-
-            lastIdRef.current = item.id;
-            if (translationData.source && translationData.dest) {
-              setTranslations((prev) => [...prev, translationData]);
-            }
-          }
-        } catch (error) {
-          console.error('Failed to parse translation data:', error);
-        }
-      }
-    });
-
-    setItems(client.conversation.getItems());
-
-    return () => {
-      // cleanup; resets to defaults
-      client.reset();
-    };
-  }, []);
-
-  /**
    * Render the application
    */
+
+  // Show API key form if no key
+  if (!apiKey || isEditingKey) {
+    return (
+      <div data-component="ConsolePage">
+        <div className="content-top">
+          <div className="content-title">
+            <img src="/openai-logomark.svg" alt="OpenAI" />
+            <span>realtime translator</span>
+          </div>
+        </div>
+        <div className="content-main">
+          <div className="api-key-form">
+            <h2>{isEditingKey ? 'Update API Key' : 'Enter your OpenAI API Key'}</h2>
+            <p>Your key is stored locally and never sent to our servers.</p>
+            <form onSubmit={handleKeySubmit}>
+              <input
+                type="password"
+                placeholder="sk-..."
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                autoFocus
+              />
+              <div className="form-buttons">
+                <Button
+                  label="Save"
+                  buttonStyle="action"
+                  onClick={() => handleKeySubmit({ preventDefault: () => {} } as React.FormEvent)}
+                />
+                {isEditingKey && (
+                  <Button
+                    label="Cancel"
+                    buttonStyle="regular"
+                    onClick={() => {
+                      setKeyInput(apiKey);
+                      setIsEditingKey(false);
+                    }}
+                  />
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div data-component="ConsolePage">
       <div className="content-top">
         <div className="content-title">
-          <img src="/openai-logomark.svg" />
-          <span>translation dictation</span>
+          <img src="/openai-logomark.svg" alt="OpenAI" />
+          <span>realtime translator</span>
         </div>
         <div className="content-api-key">
-          {!LOCAL_RELAY_SERVER_URL && (
-            <Button
-              icon={Edit}
-              iconPosition="end"
-              buttonStyle="flush"
-              label={`api key: ${apiKey.slice(0, 3)}...`}
-              onClick={() => resetAPIKey()}
-            />
-          )}
+          <Button
+            icon={Edit}
+            iconPosition="end"
+            buttonStyle="flush"
+            label={`api key: ${apiKey.slice(0, 3)}...`}
+            onClick={() => setIsEditingKey(true)}
+          />
         </div>
-        <Button
-          icon={Menu}
-          buttonStyle="flush"
-          onClick={toggleSideMenu}
-          label="side menu"
-        />
       </div>
-      <div className="content-main">
-        <div className="content-logs">
-          <div className="content-block translations">
-            <div className="visualization">
-              <div className="visualization-entry client">
-                <canvas ref={clientCanvasRef} />
-              </div>
-              <div className="visualization-entry server">
-                <canvas ref={serverCanvasRef} />
-              </div>
-            </div>
 
-            <div className="content-block-title">translations</div>
-            <div className="content-block-body" data-conversation-content>
-              <div className="translation-table">
-                <div className="translation-header">
-                  <div>English</div>
-                  {!isConnected ? (
-                    <Select
-                      options={languages}
-                      value={selectedLanguage}
-                      onChange={changeSelectedLanguage}
-                    />
-                  ) : (
-                    <div>{selectedLanguage.label}</div>
-                  )}
-                </div>
-                {translations.map((translation, index) => (
-                  <div key={index} className="translation-row">
-                    <div>{translation.source}</div>
-                    <div>{translation.dest}</div>
-                  </div>
+      <div className="content-main">
+        <div className={`content-left ${sidebarCollapsed ? 'expanded' : ''}`}>
+          {/* Language Selection - only when disconnected */}
+          {!isConnected && (
+            <div className="language-selection">
+              <select
+                value={languageA}
+                onChange={(e) => setLanguageA(e.target.value)}
+              >
+                {LANGUAGES.map((lang) => (
+                  <option key={lang} value={lang}>
+                    {lang}
+                  </option>
                 ))}
-              </div>
+              </select>
+              <span className="arrow">\u2194</span>
+              <select
+                value={languageB}
+                onChange={(e) => setLanguageB(e.target.value)}
+              >
+                {LANGUAGES.map((lang) => (
+                  <option key={lang} value={lang}>
+                    {lang}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Visualization */}
+          <div className="visualization">
+            <div className="visualization-entry client">
+              <canvas ref={clientCanvasRef} />
+            </div>
+            <div className="visualization-entry server">
+              <canvas ref={serverCanvasRef} />
             </div>
           </div>
-          <div className="spacer"></div>
+
+          {/* Conversation Timeline */}
+          <div className="timeline-container">
+            <ConversationTimeline
+              translations={translations}
+              languageA={languageA}
+              languageB={languageB}
+            />
+          </div>
+
+          {/* Controls */}
           <div className="content-actions">
             <Toggle
               defaultValue={false}
-              labels={['manual', 'vad']}
+              labels={['push-to-talk', 'vad']}
               values={['none', 'server_vad']}
               onChange={(_, value) => changeTurnEndType(value)}
             />
@@ -561,143 +589,83 @@ y   * - realtimeEvents are event logs, which can be expanded
           </div>
         </div>
 
-        {isSideMenuOpen && (
-          <div className="content-right">
-            <div className="content-block events">
-              <div className="content-block-title">events</div>
-              <div className="content-block-body" ref={eventsScrollRef}>
-                {!realtimeEvents.length && `awaiting connection...`}
-                {realtimeEvents.map((realtimeEvent, i) => {
-                  const count = realtimeEvent.count;
-                  const event = { ...realtimeEvent.event };
-                  if (event.type === 'input_audio_buffer.append') {
-                    event.audio = `[trimmed: ${event.audio.length} bytes]`;
-                  } else if (event.type === 'response.audio.delta') {
-                    event.delta = `[trimmed: ${event.delta.length} bytes]`;
-                  }
-                  return (
-                    <div className="event" key={event.event_id}>
-                      <div className="event-timestamp">
-                        {formatTime(realtimeEvent.time)}
-                      </div>
-                      <div className="event-details">
-                        <div
-                          className="event-summary"
-                          onClick={() => {
-                            // toggle event details
-                            const id = event.event_id;
-                            const expanded = { ...expandedEvents };
-                            if (expanded[id]) {
-                              delete expanded[id];
-                            } else {
-                              expanded[id] = true;
-                            }
-                            setExpandedEvents(expanded);
-                          }}
-                        >
-                          <div
-                            className={`event-source ${
-                              event.type === 'error'
-                                ? 'error'
-                                : realtimeEvent.source
-                            }`}
-                          >
-                            {realtimeEvent.source === 'client' ? (
-                              <ArrowUp />
-                            ) : (
-                              <ArrowDown />
-                            )}
-                            <span>
-                              {event.type === 'error'
-                                ? 'error!'
-                                : realtimeEvent.source}
-                            </span>
-                          </div>
-                          <div className="event-type">
-                            {event.type}
-                            {count && ` (${count})`}
-                          </div>
-                        </div>
-                        {!!expandedEvents[event.event_id] && (
-                          <div className="event-payload">
-                            {JSON.stringify(event, null, 2)}
-                          </div>
-                        )}
-                      </div>
+        {/* Sidebar Toggle */}
+        <button
+          className="sidebar-toggle"
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          title={sidebarCollapsed ? 'Show debug panel' : 'Hide debug panel'}
+        >
+          {sidebarCollapsed ? <ChevronLeft /> : <ChevronRight />}
+        </button>
+
+        {/* Right Sidebar - Debug Events */}
+        <div className={`content-right ${sidebarCollapsed ? 'collapsed' : ''}`}>
+          <div className="content-block events">
+            <div className="content-block-title">events</div>
+            <div className="content-block-body" ref={eventsScrollRef}>
+              {!realtimeEvents.length && `awaiting connection...`}
+              {realtimeEvents.map((realtimeEvent, i) => {
+                const count = realtimeEvent.count;
+                const event = { ...realtimeEvent.event };
+                if (event.type === 'input_audio_buffer.append') {
+                  event.audio = `[trimmed: ${event.audio.length} bytes]`;
+                } else if (event.type === 'response.audio.delta') {
+                  event.delta = `[trimmed: ${event.delta.length} bytes]`;
+                }
+                return (
+                  <div className="event" key={event.event_id}>
+                    <div className="event-timestamp">
+                      {formatTime(realtimeEvent.time)}
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="content-block conversation">
-              <div className="content-block-title">conversation</div>
-              <div className="content-block-body" data-conversation-content>
-                {!items.length && `awaiting connection...`}
-                {items.map((conversationItem, i) => {
-                  return (
-                    <div
-                      className="conversation-item"
-                      key={conversationItem.id}
-                    >
-                      <div className={`speaker ${conversationItem.role || ''}`}>
-                        <div>
-                          {(
-                            conversationItem.role || conversationItem.type
-                          ).replaceAll('_', ' ')}
-                        </div>
-                        <div
-                          className="close"
-                          onClick={() =>
-                            deleteConversationItem(conversationItem.id)
+                    <div className="event-details">
+                      <div
+                        className="event-summary"
+                        onClick={() => {
+                          const id = event.event_id;
+                          const expanded = { ...expandedEvents };
+                          if (expanded[id]) {
+                            delete expanded[id];
+                          } else {
+                            expanded[id] = true;
                           }
+                          setExpandedEvents(expanded);
+                        }}
+                      >
+                        <div
+                          className={`event-source ${
+                            event.type === 'error'
+                              ? 'error'
+                              : realtimeEvent.source
+                          }`}
                         >
-                          <X />
+                          {realtimeEvent.source === 'client' ? (
+                            <ArrowUp />
+                          ) : (
+                            <ArrowDown />
+                          )}
+                          <span>
+                            {event.type === 'error'
+                              ? 'error!'
+                              : realtimeEvent.source}
+                          </span>
+                        </div>
+                        <div className="event-type">
+                          {event.type}
+                          {count && ` (${count})`}
                         </div>
                       </div>
-                      <div className={`speaker-content`}>
-                        {/* tool response */}
-                        {conversationItem.type === 'function_call_output' && (
-                          <div>{conversationItem.formatted.output}</div>
-                        )}
-                        {/* tool call */}
-                        {!!conversationItem.formatted.tool && (
-                          <div>
-                            {conversationItem.formatted.tool.name}(
-                            {conversationItem.formatted.tool.arguments})
-                          </div>
-                        )}
-                        {!conversationItem.formatted.tool &&
-                          conversationItem.role === 'user' && (
-                            <div>
-                              {conversationItem.formatted.transcript ||
-                                (conversationItem.formatted.audio?.length
-                                  ? '(awaiting transcript)'
-                                  : conversationItem.formatted.text ||
-                                    '(item sent)')}
-                            </div>
-                          )}
-                        {!conversationItem.formatted.tool &&
-                          conversationItem.role === 'assistant' && (
-                            <div>
-                              {conversationItem.formatted.transcript ||
-                                conversationItem.formatted.text ||
-                                '(truncated)'}
-                            </div>
-                          )}
-                        {conversationItem.formatted.file && (
-                          <audio
-                            src={conversationItem.formatted.file.url}
-                            controls
-                          />
-                        )}
-                      </div>
+                      {!!expandedEvents[event.event_id] && (
+                        <div className="event-payload">
+                          {JSON.stringify(event, null, 2)}
+                        </div>
+                      )}
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
